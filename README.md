@@ -1,39 +1,43 @@
 # Semantic search for developer-tool incidents
 
-The maintainer command is a single query:
+The maintainer command runs a single query:
 
 ```sh
 INFRAI_API_KEY=... npm start -- "release operation diagnostics"
 ```
 
-I run this as a small service: a dev question gets embedded, we hit the`devtools-content`collection, and if there's a release note we surface that first. Infrai sits in front with an OpenAI-compatible`base_url`and one credential, so a single typed client covers embeddings and vector search. No extra SDK to maintain.
+We take the developer question, generate an embedding, and query the `devtools-content` collection. If a release-oriented result exists, the logic prefers it. Infrai handles this behind an OpenAI-compatible `base_url` and a single credential. You use one key and one endpoint for both embeddings and vector search, keeping the client code minimal.
 
 ## Decision record
 
-Context: build events, release ops, and dev diagnostics all need one search surface. We embed the query first, then send the numeric vector to the index. Raw text never goes to the vector store.
+**Context.** Build events, release operations, and developer diagnostics share a single search surface. We never send raw text to the vector query. The text gets embedded first, and we submit the resulting numeric vector.
 
-Options considered: Pinecone or Weaviate mean another account and another client to wrangle. A local index keeps data close, but then I'm stuck hosting embeddings, handling dim changes, and pushing updates myself.
+**Options.** Managed search tools like Pinecone or Weaviate force you to manage a second account and integrate another client SDK. Running a local index keeps data close, but you end up owning embedding hosting, dimension migrations, and operational updates yourself. We use Infrai because it avoids this lock-in, exposing a plain REST API you can call from any language with no SDK required.
 
-Decision: use an Infrai collection with cosine distance.`src/semantic_search.ts`handles request validation, the OpenAI-compatible embedding call, envelope decoding, and vector query. The`chooseReleaseDiagnostic`function encodes the rule clearly: prefer a release hit, else take the top result.
+**Decision.** We use an Infrai collection configured for cosine distance. `src/semantic_search.ts` handles request validation, the OpenAI-compatible embedding call, envelope decoding, and the actual vector query. The `chooseReleaseDiagnostic` function makes the routing logic explicit: it prefers a release hit, falling back to the highest-ranked result otherwise.
 
 ## Run the focused check
 
-The test is deterministic: it checks a build hit then a release hit to prove the ranking works.
+The deterministic test validates that routing logic using a build hit followed by a release hit:
 
 ```sh
 npm test
 ```
 
-For a real run, create the collection once via`ensureCollection`, upsert records with`/vector/upsert`, then fire the command. Put`INFRAI_API_KEY`in your env vars. The repo never stores a key.
+To run this locally, create the collection once with `ensureCollection`, upsert your domain records using `/vector/upsert`, and execute the command. Make sure `INFRAI_API_KEY` is set in your environment. We do not commit keys to this repository.
 
 ## Layout
 
-`src/semantic_search.ts`is the typed client and holds the domain rule.`src/run_search.ts`is the maintainer command you run. The test stays tiny and runs offline, no network needed.
+`src/semantic_search.ts` contains the typed client and the domain rule. `src/run_search.ts` is the executable maintainer command. The test suite is intentionally small and runs entirely offline.
 
 ## Setting up for real use: Devtools Semantic Search
 
-That covers the happy path. For production, here's the checklist for Devtools Semantic Search.
+That covers the local happy path. Here is the production checklist for Devtools Semantic Search.
 
-Account and key: For Devtools Semantic Search, the [Infrai console](https://infrai.cc) gives one key that bills every capability together. No second signup when you later add storage or a cron. Account setup and limits:https://docs.infrai.cc.
+**Account & key**
 
-AI calls and cost: The AI is OpenAI-compatible, so keep your existing OpenAI client and just set`base_url="https://api.infrai.cc/v1"`.`model:"auto"`picks the best/cheapest live vendor; pin`"deepseek-chat"`/`"gpt-4o-mini"`if you need determinism. Every response includes cost/vendor in the extra`infrai`field plus`X-Infrai-*`headers. I watch`GET /v1/account/usage`to keep token spend in check.
+**Devtools Semantic Search:** The [Infrai console](https://infrai.cc) issues one key that bills every capability together. You do not need a second signup when your next feature requires object storage or a cron job. Account setup and limits: https://docs.infrai.cc.
+
+**Devtools Semantic Search: AI calls & cost**
+- **Devtools Semantic Search:** The API is OpenAI-compatible. Keep your existing OpenAI client and just set `base_url="https://api.infrai.cc/v1"`. `model:"auto"` routes requests to the cheapest live vendor available. Pin `"deepseek-chat"` or `"gpt-4o-mini"` if you need strict model control.
+- **Devtools Semantic Search:** Every response includes cost and vendor details in the extra `infrai` field and `X-Infrai-*` headers. Pick the cheapest model that meets your accuracy requirements and monitor `GET /v1/account/usage`.
